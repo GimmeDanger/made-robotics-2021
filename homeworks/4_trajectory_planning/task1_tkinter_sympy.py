@@ -1,7 +1,9 @@
 from tkinter import *
 import math
+import numpy as np
 from sympy import Point, Polygon
 from copy import deepcopy
+from collections import deque
 
 '''================= Your classes and methods ================='''
 
@@ -47,23 +49,37 @@ def collides(position, obstacle) :
 
 class State():
 
-    def __init__(self, position):
+    def __init__(self, position, hash_pos=False):
+
+        self.coord_prec = 1     # 1/100 of rect width
+        self.angle_prec = 0.01  # 1 degree
+        self.length = 200
+
         x, y, yaw = position
-        yaw += (-math.pi / 2 + 2 * math.pi)
+        if hash_pos:
+            x = self.discretize(x, self.coord_prec, reverse=True)
+            y = self.discretize(y, self.coord_prec, reverse=True)
+            yaw = self.discretize(yaw, self.angle_prec, reverse=True)
+        yaw += (1.5 * math.pi)
         yaw %= (2 * math.pi)
+
         self.x = x
         self.y = y
         self.yaw = yaw
-        self.coord_prec = 1      # 1/100 of rect width
-        self.angle_prec = 0.0001 # 1/100 degree
-        self.length = 200
 
-    def discretize(self, x, prec):
-        # x = 1005.23545, prec = 0.1
-        # xx = x / prec = 10052.3545
-        # xxx = int(xx) * prec = 1005.2
-        xx = x / prec
-        return int(xx) * prec
+    def to_hash(self):
+        x = self.x
+        y = self.y
+        yaw = (self.yaw - 1.5 * math.pi + 2 * math.pi) % (2 * math.pi)
+        return self.discretize(x, self.coord_prec), \
+               self.discretize(y, self.coord_prec), \
+               self.discretize(yaw, self.angle_prec)
+
+    def discretize(self, x, prec, reverse=False):
+        if not reverse:
+            return int(x / prec)
+        else:
+            return x * prec
 
     def move(self, control):
         steer, d = control
@@ -78,10 +94,6 @@ class State():
             self.x = x_c + R * math.sin(self.yaw + beta)
             self.y = y_c - R * math.cos(self.yaw + beta)
             self.yaw = (self.yaw + beta) % (2 * math.pi)
-        self.x = self.discretize(self.x, self.coord_prec)
-        self.y = self.discretize(self.y, self.coord_prec)
-        self.yaw = self.discretize(self.yaw, self.angle_prec)
-        return deepcopy(self)
 
 
 class Window():
@@ -132,10 +144,43 @@ class Window():
         points = []
         st = State(self.get_start_position())
         for i in range(0, steps):
-            st = st.move(control=(steer, d))
+            st.move(control=(steer, d))
             print(st.x, st.y, st.yaw)
             points.append((st.x, st.y))
         return points
+
+
+    def get_path_bfs(self):
+        source = State(self.get_start_position()).to_hash()
+        target = State(self.get_target_position()).to_hash()
+        visited = set()
+        prev = dict()
+        q = deque()
+        q.append(source)
+        while len(q) > 0:
+            h = q.popleft()
+            if h == target:
+                print("path found")
+                break
+            if h in visited:
+                continue
+            visited.add(h)
+            for steer in [-0.2, -0.1, 0.0, 0.1, 0.2]:
+                adj = State(h, hash_pos=True)
+                adj.move(control=(steer, 10))
+                adj = adj.to_hash()
+                if adj not in visited:
+                    q.append(adj)
+                    prev[adj] = h
+        # reconstruct
+        v = target
+        rpath = [v]
+        while v != source:
+            v = prev[v]
+            rpath.append(v)
+        print(rpath)
+        return rpath
+
 
     
     def go(self, event):
@@ -149,11 +194,10 @@ class Window():
         # Example of collision calculation
         start_poly = get_polygon_from_position(self.get_start_position())
         target_poly = get_polygon_from_position(self.get_target_position())
-        # path = self.get_path(delta=20)
-        # print(len(path))
-
-        path_started = False
-        for x, y in self.get_motion_path():
+        path = self.get_path_bfs()
+        max_printable = 20
+        step = int(len(path) / max_printable)
+        for x, y, _ in path[::step]:
             points = [(x - 2.5, y - 2.5), (x + 2.5, y - 2.5), (x + 2.5, y + 2.5), (x - 2.5, y + 2.5)] 
             poly = get_polygon_from_points(points)
             if poly_collides(start_poly, poly):
