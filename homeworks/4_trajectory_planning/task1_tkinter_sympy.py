@@ -154,117 +154,88 @@ class Window():
         return points
 
 
-    def get_error(self, h_lhs, h_rhs):
+    def get_error(self, h_lhs, h_rhs, angle_weight):
         lhs = State(h_lhs, hash_pos=True)
         rhs = State(h_rhs, hash_pos=True)
         x_lhs, y_lhs, yaw_lhs = lhs.x, lhs.y, lhs.yaw
         x_rhs, y_rhs, yaw_rhs = rhs.x, rhs.y, rhs.yaw
         x = abs(x_lhs - x_rhs)
         y = abs(y_lhs - y_rhs)
-        yaw = 500 * abs(yaw_lhs - yaw_rhs)
+        yaw = angle_weight * abs(yaw_lhs - yaw_rhs)
         return math.sqrt(x * x + y * y + yaw * yaw)
 
 
-    def a_star_h(self, h_lhs, h_rhs):
-        return self.get_error(h_lhs, h_rhs)
+    def a_star_h(self, h_lhs, h_rhs, angle_weight):
+        return self.get_error(h_lhs, h_rhs, angle_weight)
 
 
-    def get_path_a_star(self):
-        source = State(self.get_start_position()).to_hash()
-        target = State(self.get_target_position()).to_hash()
+    def get_path_a_star(self, source, target, d_fraq=10, angle_weight=10, possible_steers=[-0.7, -0.2, 0, 0.2, 0.7]):
         visited = set()
         prev = dict()
         g = dict()
         g[source] = 0
-        f = g[source] + self.a_star_h(source, target)
+        f = g[source] + self.a_star_h(source, target, angle_weight)
         pq = []
         heappush(pq, (f, source))
 
-        closest, smallest_err = None, 1e+32
-        max_iters = 2000000
+        closest, best_err, prev_best_err = None, 1e+32, 1e+32
+        max_iters = 1000000
         iter = 0
 
         while pq:
             _, current = heappop(pq)
-            err = self.get_error(current, target)
-            if err < smallest_err:
-                smallest_err = err
-                closest = current
-            # print(iter, smallest_err, clossest)
+            err = self.get_error(current, target, angle_weight)
+
             iter += 1
+            converged = False
             if iter % (max_iters / 100) == 0:
-                print(f'iter = {iter}, smallest_err = {smallest_err}')
+                print(f'iter = {iter}, best_err = {best_err}')
+                if iter % (max_iters / 20) == 0:
+                    if abs(prev_best_err - best_err) < 1.e-6:
+                        converged = True
+                    prev_best_err = best_err
             
-            if current == target or iter == max_iters:
+            if current == target or converged or iter == max_iters:
                 if iter == max_iters:
                     cls = State(closest, hash_pos=True)
-                    print(f'max iters reached: closest = {cls.to_hash(False)}, err = {smallest_err}')
+                    print(f'max iters reached: closest = {cls.to_hash(False)}, best_err = {best_err}')
                 else:
                     print(f'target reached')
                 break
             if current in visited:
                 continue
-            visited.add(current)
 
-            d = self.a_star_h(current, target) / 10
-            for steer in [-0.3, -0.2, -0.1, 0, 0.1, 0.2, 0.3]:
-                v = State(current, hash_pos=True)
+            visited.add(current)
+            if err < best_err:
+                best_err = err
+                closest = current
+
+            d = self.a_star_h(current, target, angle_weight) / d_fraq                                                                                                                                              
+            for steer in possible_steers:
+                v = State(current, hash_pos=True)                                                                                                                                                         
                 v.move(control=(steer, d))
                 v = v.to_hash()
-                score = g[current] + self.a_star_h(current, v)
+                score = g[current] + self.a_star_h(current, v, angle_weight)
                 if v in visited and score >= g[v]:
                     continue
                 if v not in visited or score < g[v]:
                     prev[v] = current
                     g[v] = score
-                    f = score + self.a_star_h(v, target)
+                    f = score + self.a_star_h(v, target, angle_weight)
                     heappush(pq, (f, v))
         # reconstruct
         rpath = []
         v = closest
         while v != source:
             st = State(v, hash_pos=True)
-            rpath.append((st.x, st.y))
+            st = st.to_hash(False)
+            rpath.append(st)
             v = prev[v]
         st = State(v, hash_pos=True)
-        rpath.append((st.x, st.y))
+        st = st.to_hash(False)
+        rpath.append(st)
         print(f'total path length = {len(rpath)}')
         return rpath
-
-
-    def get_path_bfs(self):
-        source = State(self.get_start_position()).to_hash()
-        target = State(self.get_target_position()).to_hash()
-        visited = set()
-        prev = dict()
-        q = deque()
-        q.append(source)
-        while len(q) > 0:
-            h = q.popleft()
-            if h == target:
-                print("path found")
-                break
-            if h in visited:
-                continue
-            visited.add(h)
-            for steer in [-0.2, -0.1, 0.0, 0.1, 0.2]:
-                adj = State(h, hash_pos=True)
-                adj.move(control=(steer, 10))
-                adj = adj.to_hash()
-                if adj not in visited:
-                    q.append(adj)
-                    prev[adj] = h
-        # reconstruct
-        rpath = []
-        v = target
-        while v != source:
-            st = State(v, hash_pos=True)
-            rpath.append((st.x, st.y))
-            v = prev[v]
-        st = State(v, hash_pos=True)
-        rpath.append((st.x, st.y))
-        return rpath
-
 
     
     def go(self, event):
@@ -276,18 +247,44 @@ class Window():
         print("Obstacles:", self.get_obstacles())
         
         # Example of collision calculation
-        start_poly = get_polygon_from_position(self.get_start_position())
-        target_poly = get_polygon_from_position(self.get_target_position())
-        path = self.get_path_a_star()
+        source_x, source_y, source_yaw = self.get_start_position()
+        source = State((source_x, source_y, source_yaw))
+        source = source.to_hash()
+        target_x, target_y, target_yaw = self.get_target_position()
+        sgn = -1 if target_x > source_x else 1
+        target = State((target_x, target_y, target_yaw + math.pi))
+        target = State((target_x + sgn * target.length, target_y, target_yaw + math.pi))
+        target.move(control=(0, target.length * 2))
+        target_x, target_y, target_yaw = target.to_hash(False)
+        target = State((target_x, target_y, target_yaw - math.pi))
+        print("Pre target position:", target.to_hash(False)) 
+        target = target.to_hash()
+
+        path = self.get_path_a_star(source, target,
+                                    d_fraq=5, angle_weight=25,
+                                    possible_steers=[-0.7, -0.3, 0, 0.3, 0.7])
         max_printable = 20
         step = int(len(path) / max_printable) if len(path) > max_printable else 1
-        for x, y in path[::step]:
+        path = path[::step] if step > 1 else path
+        for x, y, yaw in path:
             points = [(x - 5, y - 5), (x + 5, y - 5), (x + 5, y + 5), (x - 5, y + 5)] 
-            # poly = get_polygon_from_points(points)
-            # if poly_collides(start_poly, poly):
-            #     continue
-            # if poly_collides(target_poly, poly):
-            #     continue
+            self.path_object_ids.add(self.draw_block(points, "#ff0000"))
+
+        source_x, source_y, source_yaw = path[0]
+        source = State((source_x, source_y, source_yaw))
+        print("Prev source position:", source.to_hash(False)) 
+        source = source.to_hash()
+        target = State(self.get_target_position())
+        print("Real target position:", target.to_hash(False)) 
+        target = target.to_hash()
+        path = self.get_path_a_star(source, target,
+                                    d_fraq=10, angle_weight=100,
+                                    possible_steers=[-0.3, -0.1, 0, 0.1, 0.3])
+        max_printable = 20
+        step = int(len(path) / max_printable) if len(path) > max_printable else 1
+        path = path[::step] if step > 1 else path
+        for x, y, yaw in path:
+            points = [(x - 5, y - 5), (x + 5, y - 5), (x + 5, y + 5), (x - 5, y + 5)] 
             self.path_object_ids.add(self.draw_block(points, "#ff0000"))
         
         number_of_collisions = 0
@@ -491,7 +488,6 @@ class Window():
 
         block = [[0, 100], [100, 100], [100, 300], [0, 300]]
         id = self.draw_block(block, "black")
-        print(id)
 
         self.canvas.tag_bind(id, "<Button-1>", self.start_block)
         self.canvas.tag_bind(id, "<Button-3>", self.set_id_block)
