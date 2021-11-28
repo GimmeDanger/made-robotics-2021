@@ -1,4 +1,5 @@
 from tkinter import *
+from heapq import *
 import math
 import numpy as np
 from sympy import Point, Polygon
@@ -51,29 +52,32 @@ class State():
 
     def __init__(self, position, hash_pos=False):
 
-        self.coord_prec = 1     # 1/100 of rect width
-        self.angle_prec = 0.01  # 1 degree
-        self.length = 200
+        self.coord_prec = 1
+        self.angle_prec = 0.001
+        self.length = 150
 
         x, y, yaw = position
         if hash_pos:
             x = self.discretize(x, self.coord_prec, reverse=True)
             y = self.discretize(y, self.coord_prec, reverse=True)
             yaw = self.discretize(yaw, self.angle_prec, reverse=True)
-        yaw += (1.5 * math.pi)
+        yaw = yaw + (1.5 * math.pi)
         yaw %= (2 * math.pi)
 
         self.x = x
         self.y = y
         self.yaw = yaw
 
-    def to_hash(self):
+    def to_hash(self, do_discretize=True):
         x = self.x
         y = self.y
         yaw = (self.yaw - 1.5 * math.pi + 2 * math.pi) % (2 * math.pi)
-        return self.discretize(x, self.coord_prec), \
-               self.discretize(y, self.coord_prec), \
-               self.discretize(yaw, self.angle_prec)
+        if do_discretize:
+            return self.discretize(x, self.coord_prec), \
+                   self.discretize(y, self.coord_prec), \
+                   self.discretize(yaw, self.angle_prec)
+        else:
+            return x, y, yaw
 
     def discretize(self, x, prec, reverse=False):
         if not reverse:
@@ -150,6 +154,84 @@ class Window():
         return points
 
 
+    def get_error(self, h_lhs, h_rhs):
+        lhs = State(h_lhs, hash_pos=True)
+        rhs = State(h_rhs, hash_pos=True)
+        x_lhs, y_lhs, yaw_lhs = lhs.x, lhs.y, lhs.yaw
+        x_rhs, y_rhs, yaw_rhs = rhs.x, rhs.y, rhs.yaw
+        x = abs(x_lhs - x_rhs)
+        y = abs(y_lhs - y_rhs)
+        yaw = 500 * abs(yaw_lhs - yaw_rhs)
+        return math.sqrt(x * x + y * y + yaw * yaw)
+
+
+    def a_star_h(self, h_lhs, h_rhs):
+        return self.get_error(h_lhs, h_rhs)
+
+
+    def get_path_a_star(self):
+        source = State(self.get_start_position()).to_hash()
+        target = State(self.get_target_position()).to_hash()
+        visited = set()
+        prev = dict()
+        g = dict()
+        g[source] = 0
+        f = g[source] + self.a_star_h(source, target)
+        pq = []
+        heappush(pq, (f, source))
+
+        closest, smallest_err = None, 1e+32
+        max_iters = 2000000
+        iter = 0
+
+        while pq:
+            _, current = heappop(pq)
+            err = self.get_error(current, target)
+            if err < smallest_err:
+                smallest_err = err
+                closest = current
+            # print(iter, smallest_err, clossest)
+            iter += 1
+            if iter % (max_iters / 100) == 0:
+                print(f'iter = {iter}, smallest_err = {smallest_err}')
+            
+            if current == target or iter == max_iters:
+                if iter == max_iters:
+                    cls = State(closest, hash_pos=True)
+                    print(f'max iters reached: closest = {cls.to_hash(False)}, err = {smallest_err}')
+                else:
+                    print(f'target reached')
+                break
+            if current in visited:
+                continue
+            visited.add(current)
+
+            d = self.a_star_h(current, target) / 10
+            for steer in [-0.3, -0.2, -0.1, 0, 0.1, 0.2, 0.3]:
+                v = State(current, hash_pos=True)
+                v.move(control=(steer, d))
+                v = v.to_hash()
+                score = g[current] + self.a_star_h(current, v)
+                if v in visited and score >= g[v]:
+                    continue
+                if v not in visited or score < g[v]:
+                    prev[v] = current
+                    g[v] = score
+                    f = score + self.a_star_h(v, target)
+                    heappush(pq, (f, v))
+        # reconstruct
+        rpath = []
+        v = closest
+        while v != source:
+            st = State(v, hash_pos=True)
+            rpath.append((st.x, st.y))
+            v = prev[v]
+        st = State(v, hash_pos=True)
+        rpath.append((st.x, st.y))
+        print(f'total path length = {len(rpath)}')
+        return rpath
+
+
     def get_path_bfs(self):
         source = State(self.get_start_position()).to_hash()
         target = State(self.get_target_position()).to_hash()
@@ -173,12 +255,14 @@ class Window():
                     q.append(adj)
                     prev[adj] = h
         # reconstruct
+        rpath = []
         v = target
-        rpath = [v]
         while v != source:
+            st = State(v, hash_pos=True)
+            rpath.append((st.x, st.y))
             v = prev[v]
-            rpath.append(v)
-        print(rpath)
+        st = State(v, hash_pos=True)
+        rpath.append((st.x, st.y))
         return rpath
 
 
@@ -194,17 +278,17 @@ class Window():
         # Example of collision calculation
         start_poly = get_polygon_from_position(self.get_start_position())
         target_poly = get_polygon_from_position(self.get_target_position())
-        path = self.get_path_bfs()
+        path = self.get_path_a_star()
         max_printable = 20
-        step = int(len(path) / max_printable)
-        for x, y, _ in path[::step]:
-            points = [(x - 2.5, y - 2.5), (x + 2.5, y - 2.5), (x + 2.5, y + 2.5), (x - 2.5, y + 2.5)] 
-            poly = get_polygon_from_points(points)
-            if poly_collides(start_poly, poly):
-                continue
-            if poly_collides(target_poly, poly):
-                continue
-            self.path_object_ids.append(self.draw_block(points, "#ff0000"))
+        step = int(len(path) / max_printable) if len(path) > max_printable else 1
+        for x, y in path[::step]:
+            points = [(x - 5, y - 5), (x + 5, y - 5), (x + 5, y + 5), (x - 5, y + 5)] 
+            # poly = get_polygon_from_points(points)
+            # if poly_collides(start_poly, poly):
+            #     continue
+            # if poly_collides(target_poly, poly):
+            #     continue
+            self.path_object_ids.add(self.draw_block(points, "#ff0000"))
         
         number_of_collisions = 0
         for obstacle in self.get_obstacles() :
@@ -216,7 +300,7 @@ class Window():
     def delete_path(self):
         for id in self.path_object_ids:
             self.canvas.delete(id)
-        self.path_object_ids = []
+        self.path_object_ids = set()
         
         
     '''================= Interface Methods ================='''
@@ -225,7 +309,7 @@ class Window():
         obstacles = []
         potential_obstacles = self.canvas.find_all()
         for i in potential_obstacles:
-            if (i > 2) :
+            if i > 2 and i not in self.path_object_ids:
                 coords = self.canvas.coords(i)
                 if coords:
                     obstacles.append(coords)
@@ -497,7 +581,7 @@ class Window():
         self.root.geometry(f'{self.width}x{self.height}')
         self.canvas = Canvas(self.root, bg="#777777", height=self.height, width=self.width)
         self.canvas.pack()
-        self.path_object_ids = []
+        self.path_object_ids = set()
     
 if __name__ == "__main__":
     run = Window()
