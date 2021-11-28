@@ -1,6 +1,7 @@
 from tkinter import *
 import math
 from sympy import Point, Polygon
+from copy import deepcopy
 
 '''================= Your classes and methods ================='''
 
@@ -42,13 +43,53 @@ def poly_collides(poly_lhs, poly_rhs) :
 def collides(position, obstacle) :
     return poly_collides(get_polygon_from_position(position),
                          get_polygon_from_obstacle(obstacle))
-        
+
+
+class State():
+
+    def __init__(self, position):
+        x, y, yaw = position
+        yaw += (-math.pi / 2 + 2 * math.pi)
+        yaw %= (2 * math.pi)
+        self.x = x
+        self.y = y
+        self.yaw = yaw
+        self.coord_prec = 1      # 1/100 of rect width
+        self.angle_prec = 0.0001 # 1/100 degree
+        self.length = 200
+
+    def discretize(self, x, prec):
+        # x = 1005.23545, prec = 0.1
+        # xx = x / prec = 10052.3545
+        # xxx = int(xx) * prec = 1005.2
+        xx = x / prec
+        return int(xx) * prec
+
+    def move(self, control):
+        steer, d = control
+        if abs(steer) < 1e-16:
+            self.x = self.x + d * math.cos(self.yaw)
+            self.y = self.y + d * math.sin(self.yaw)
+        else:
+            R = self.length / math.tan(steer)
+            beta = d / R
+            x_c = self.x - R * math.sin(self.yaw)
+            y_c = self.y + R * math.cos(self.yaw)
+            self.x = x_c + R * math.sin(self.yaw + beta)
+            self.y = y_c - R * math.cos(self.yaw + beta)
+            self.yaw = (self.yaw + beta) % (2 * math.pi)
+        self.x = self.discretize(self.x, self.coord_prec)
+        self.y = self.discretize(self.y, self.coord_prec)
+        self.yaw = self.discretize(self.yaw, self.angle_prec)
+        return deepcopy(self)
+
 
 class Window():
         
     '''================= Your Main Function ================='''
 
-    def get_path(self, eps=1.e-8, delta=1.e-2, max_iters=1.e+8):
+
+    def get_line_path(self, eps=1.e-8, delta=1.e-2, max_iters=1.e+8):
         points = []
         s_x, s_y, _ = self.get_start_position()
         t_x, t_y, _ = self.get_target_position()
@@ -85,7 +126,17 @@ class Window():
             iter += 1
 
         return points
-        
+    
+
+    def get_motion_path(self, steer=0.0, d=20, steps=20):
+        points = []
+        st = State(self.get_start_position())
+        for i in range(0, steps):
+            st = st.move(control=(steer, d))
+            print(st.x, st.y, st.yaw)
+            points.append((st.x, st.y))
+        return points
+
     
     def go(self, event):
     
@@ -98,19 +149,18 @@ class Window():
         # Example of collision calculation
         start_poly = get_polygon_from_position(self.get_start_position())
         target_poly = get_polygon_from_position(self.get_target_position())
-        path = self.get_path(delta=20)
+        # path = self.get_path(delta=20)
+        # print(len(path))
+
         path_started = False
-        print(len(path))
-        for x, y in path:
+        for x, y in self.get_motion_path():
             points = [(x - 2.5, y - 2.5), (x + 2.5, y - 2.5), (x + 2.5, y + 2.5), (x - 2.5, y + 2.5)] 
             poly = get_polygon_from_points(points)
-            if not path_started:
-                if poly_collides(start_poly, poly):
-                    continue
-                else:
-                    path_started = True
-            if not poly_collides(target_poly, poly):
-                self.path_object_ids.append(self.draw_block(points, "#ff0000"))
+            if poly_collides(start_poly, poly):
+                continue
+            if poly_collides(target_poly, poly):
+                continue
+            self.path_object_ids.append(self.draw_block(points, "#ff0000"))
         
         number_of_collisions = 0
         for obstacle in self.get_obstacles() :
@@ -120,12 +170,9 @@ class Window():
 
 
     def delete_path(self):
-        print("Deleting:", self.path_object_ids)
         for id in self.path_object_ids:
             self.canvas.delete(id)
         self.path_object_ids = []
-        print("Path objects:", self.path_object_ids)
-        print("Rest obstacles:", self.get_obstacles())
         
         
     '''================= Interface Methods ================='''
