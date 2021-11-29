@@ -36,16 +36,13 @@ def get_polygon_from_obstacle(obstacle) :
     points = [(obstacle[0], obstacle[1]), (obstacle[2], obstacle[3]), (obstacle[4], obstacle[5]), (obstacle[6], obstacle[7])] 
     return Polygon(*list(map(Point, points)))
 
-def get_polygon_from_points(points) :
-    return Polygon(*list(map(Point, points)))
-
-def poly_collides(poly_lhs, poly_rhs) :
-    return poly_lhs.intersection(poly_rhs) or \
-        True in [poly_lhs.encloses_point(p) for p in poly_rhs.vertices]
-
 def collides(position, obstacle) :
-    return poly_collides(get_polygon_from_position(position),
-                         get_polygon_from_obstacle(obstacle))
+    x1, y1, _ = position
+    x2 = sum([x for i, x in enumerate(obstacle) if i % 2 == 0]) / 4
+    y2 = sum([x for i, x in enumerate(obstacle) if i % 2 == 1]) / 4
+    if (x1-x2)**2 + (y1-y2)**2 > 50000:
+        return False
+    return get_polygon_from_position(position).intersection(get_polygon_from_obstacle(obstacle))
 
 
 class State():
@@ -103,57 +100,7 @@ class State():
 class Window():
         
     '''================= Your Main Function ================='''
-
-
-    def get_line_path(self, eps=1.e-8, delta=1.e-2, max_iters=1.e+8):
-        points = []
-        s_x, s_y, _ = self.get_start_position()
-        t_x, t_y, _ = self.get_target_position()
-        # ax + by + k = 0
-        if abs(s_x - t_x) < eps and abs(s_y - t_y) < eps:
-            return points
-        elif abs(s_x - t_x) < eps:
-            a = 0
-            b = 1
-            k = -s_y
-        elif abs(s_y - t_y) < eps:
-            a = 1
-            b = 0
-            k = -s_x
-        else:
-            a = -1 * (s_y - t_y) / (s_x - t_x)
-            b = 1
-            k = -1 * (a * s_x + b * s_y)
-        iter = 0
-        sgn_x = 1 if t_x > s_x else -1
-        sgn_y = 1 if t_y > s_y else -1
-        while abs(s_x - t_x) > delta or abs(s_y - t_y) > delta:
-            points.append((s_x, s_y))
-            if abs(a) < eps:
-                s_y += delta * sgn_y
-            elif abs(b) < eps:
-                s_x += delta * sgn_x
-            else:
-                s_x += delta * sgn_x
-                s_y = (-k - a * s_x) / b
-            if iter > max_iters:
-                print("Error: cannot construct path")
-                return []
-            iter += 1
-
-        return points
     
-
-    def get_motion_path(self, steer=0.0, d=20, steps=20):
-        points = []
-        st = State(self.get_start_position())
-        for i in range(0, steps):
-            st.move(control=(steer, d))
-            print(st.x, st.y, st.yaw)
-            points.append((st.x, st.y))
-        return points
-
-
     def get_error(self, h_lhs, h_rhs, angle_weight):
         lhs = State(h_lhs, hash_pos=True)
         rhs = State(h_rhs, hash_pos=True)
@@ -214,6 +161,12 @@ class Window():
             for steer in possible_steers:
                 v = State(current, hash_pos=True)                                                                                                                                                         
                 v.move(control=(steer, d))
+                number_of_collisions = 0
+                for obstacle in self.get_obstacles() :
+                    if collides(v.to_hash(False), obstacle) :
+                        number_of_collisions += 1
+                if number_of_collisions > 0:
+                    continue
                 v = v.to_hash()
                 score = g[current] + self.a_star_h(current, v, angle_weight)
                 if v in visited and score >= g[v]:
@@ -223,6 +176,7 @@ class Window():
                     g[v] = score
                     f = score + self.a_star_h(v, target, angle_weight)
                     heappush(pq, (f, v))
+
         # reconstruct
         rpath = []
         v = closest
@@ -251,7 +205,7 @@ class Window():
         source = State((source_x, source_y, source_yaw))
         source = source.to_hash()
         target_x, target_y, target_yaw = self.get_target_position()
-        sgn = -1 if target_x > source_x else 1
+        sgn = 0 #if abs(target_x - source_x) < 400 else -1 if target_x > source_x else 1
         target = State((target_x, target_y, target_yaw + math.pi))
         target = State((target_x + sgn * target.length, target_y, target_yaw + math.pi))
         target.move(control=(0, target.length * 2))
@@ -261,14 +215,11 @@ class Window():
         target = target.to_hash()
 
         path = self.get_path_a_star(source, target,
-                                    d_fraq=5, angle_weight=25,
+                                    d_fraq=5, angle_weight=100,
                                     possible_steers=[-0.7, -0.3, 0, 0.3, 0.7])
         max_printable = 20
         step = int(len(path) / max_printable) if len(path) > max_printable else 1
-        path = path[::step] if step > 1 else path
-        for x, y, yaw in path:
-            points = [(x - 5, y - 5), (x + 5, y - 5), (x + 5, y + 5), (x - 5, y + 5)] 
-            self.path_object_ids.add(self.draw_block(points, "#ff0000"))
+        path_lo = path[::step] if step > 1 else path
 
         source_x, source_y, source_yaw = path[0]
         source = State((source_x, source_y, source_yaw))
@@ -282,8 +233,8 @@ class Window():
                                     possible_steers=[-0.3, -0.1, 0, 0.1, 0.3])
         max_printable = 20
         step = int(len(path) / max_printable) if len(path) > max_printable else 1
-        path = path[::step] if step > 1 else path
-        for x, y, yaw in path:
+        path_hi = path[::step] if step > 1 else path
+        for x, y, yaw in path_lo + path_hi:
             points = [(x - 5, y - 5), (x + 5, y - 5), (x + 5, y + 5), (x - 5, y + 5)] 
             self.path_object_ids.add(self.draw_block(points, "#ff0000"))
         
