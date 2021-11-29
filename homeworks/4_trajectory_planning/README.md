@@ -1,4 +1,4 @@
-# Homework 5
+# Homework 4
 
 In this homework assignment you are going to implement an algorithm for 
 trajectory calculation for a self-driving car in a parking lot.
